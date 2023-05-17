@@ -1,0 +1,241 @@
+%%Ali  Qarradi 
+
+clear all
+clc 
+close all 
+objects = imaqfind %find video input objects in memory
+delete(objects) %delete a video input object from memory
+%% Arduino encoder for 6 servo motors 
+a = arduino()
+s1 = servo(a,'D2');
+s2 = servo(a,'D3');
+s3 = servo(a,'D4');
+s4 = servo(a,'D5');
+s5 = servo(a,'D6');
+s6 = servo(a,'D7');
+
+for i=0:1:4
+    %the six sevo motors variable.
+P1=30; %Gripper 30 is open,  100 catch
+P2=85;%fixed
+P3=100;
+P4=50; %increse (y=>inc z=>dec)
+P5=30; %increse (y=>inc z=>dec)
+P6=0;%increase (dec x)
+
+K_p=0.1;
+T=3;
+v=videoinput('winvideo',1); 
+bc=[0 0]; %the position at the webcam
+q=[0 0];
+target =[85 70]; % the desire x y in the webcam
+R=[0 0 0 0 0 0];
+
+%%%%%%%%%%%%%%%%%%%%%%Arduino%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% the start position
+pause(0.1)
+writePosition(s1,P1/180)
+writePosition(s2,P2/180)
+writePosition(s3,P3/180)
+writePosition(s4,P4/180)
+writePosition(s5,P5/180)
+writePosition(s6,P6/180)  % 90=catch, 0=open
+
+% Set the properties of the video object
+set(v, 'FramesPerTrigger', Inf);
+set(v, 'ReturnedColorspace', 'rgb')
+v.FrameGrabInterval = 5;
+
+%start the video aquisition here
+start(v)
+
+% Set a loop that stop after 100 frames of aquisition
+while(v.FramesAcquired<=200)
+   % Get the snapshot of the current frame
+    data = getsnapshot(v);
+    
+    % Now to track red objects in real time 
+    % we have to subtract the red component 
+    % from the grayscale image to extract the red components in the image.
+    diff_im = imsubtract(data(:,:,1), rgb2gray(data));
+    %Use a median filter to filter out noise
+    diff_im = medfilt2(diff_im, [3 3]);
+    % Convert the resulting grayscale image into a binary image.
+    diff_im = im2bw(diff_im,0.18);
+    
+    % Remove all those pixels less than 300px
+    diff_im = bwareaopen(diff_im,300);
+    
+    % Label all the connected components in the image.
+    bw = bwlabel(diff_im, 8);
+    
+    % Here we do the image blob analysis.
+    % We get a set of properties for each labeled region.
+    stats = regionprops(bw, 'BoundingBox', 'Centroid');
+    
+    % Display the image
+    imshow(data)
+    
+    hold on
+    
+    %This is a loop to bound the red objects in a rectangular box.
+    for object = 1:length(stats)
+        bb = stats(object).BoundingBox;
+        bc = stats(object).Centroid
+        rectangle('Position',bb,'EdgeColor','r','LineWidth',2)
+        plot(bc(1),bc(2), '-m+')
+        a=text(bc(1)+15,bc(2), strcat('X: ', num2str(round(bc(1))), '    Y: ', num2str(round(bc(2)))));
+        set(a, 'FontName', 'Arial', 'FontWeight', 'bold', 'FontSize', 12, 'Color', 'yellow');
+    end
+    %compute the error
+    error_x=abs(bc(1,1)-target(1,1));
+    error_y=abs(bc(1,2)-target(1,2));
+    %if the object not found keeping going write
+    if bc(1,1)==0 && bc(1,2)==0
+        P6=P6+5;
+        if P6==170
+            P6=0;
+            P5=P5+2;
+        end
+       %if the object found keeping adjusting the x y position.
+     elseif    ((bc(1,2)> (target(1,2)+T)) || (bc(1,2)<(target(1,2)-T)))  
+        if    (bc(1,2)>(target(1,2)+T))
+
+                P5=P5-0.75*K_p*error_y;
+                P4=P4-1.15*K_p*error_y;
+                
+        else  (bc(1,2)<(target(1,2)-T))
+                P5=P5+0.75*K_p*error_y;
+                P4=P4+1.15*K_p*error_y;
+                
+        end
+        
+
+     elseif     ((bc(1,1)>(target(1,1)+T)) || (bc(1,1)<(target(1,1)-T)))
+        if     (bc(1,1)>(target(1,1)+T))
+                P6=P6-K_p*error_x;
+                
+        else  (bc(1,1)<(target(1,1)-T))              
+                P6=P6+K_p*error_x;
+               
+        end           
+      % if the object at the desire position, break the while loop
+    else
+        break
+        
+            
+    end
+             
+   writePosition(s1,P1/180)
+   writePosition(s2,P2/180)
+   writePosition(s3,P3/180)
+   writePosition(s4,P4/180)
+   writePosition(s5,P5/180)
+   writePosition(s6,P6/180)  
+   
+   % need this, in case the robot lost the object while tracking (optional)
+   Det_bc_1=abs(bc(1,1)-q(1,1));
+   Det_bc_2=abs(bc(1,2)-q(1,2));
+   
+   if (Det_bc_1==0) && (Det_bc_2==0)
+       bc=[0 0];
+   end
+   q=bc; %save previos position
+        
+    hold off
+
+    pause(0.0001); %% delay time of seconds
+    % save the last values of each motor.
+    R(1,1)=150;
+    R(1,2)=P2;
+    R(1,3)=P3;
+    R(1,4)=P4;
+    R(1,5)=P5;
+    R(1,6)=P6;
+    
+end
+
+%%go down action
+for i=0:2:24
+writePosition(s1,P1/180)
+writePosition(s2,P2/180)
+writePosition(s3,P3/180)
+writePosition(s4,(P4+0.8*i)/180)
+writePosition(s5,(P5+1.4*i)/180)
+writePosition(s6,(P6+10)/180)
+pause(0.05)
+end
+
+% Stop the video aquisition.
+stop(v);
+% Flush all the image data stored in the memory buffer.
+flushdata(v);
+
+pause(1)
+
+%%catch object  
+writePosition(s1,100/180)
+pause(5)
+
+  
+   %go up action where the robot arm was.
+  while 1
+      if (R(1,4)>56) || (R(1,4)<54.5)
+          if (R(1,4)>56)
+              R(1,4)=R(1,4)-1;
+          else
+              R(1,4)=R(1,4)+1;
+          end
+          
+      elseif (R(1,5)>16) || (R(1,5)<14.5)
+          if (R(1,5)>16)
+              R(1,5)=R(1,5)-1;
+          else
+              R(1,5)=R(1,5)+1;
+          end
+          
+      elseif (R(1,6)>121) || (R(1,6)<119)
+          if (R(1,6)>121)
+              R(1,6)=R(1,6)-1;
+          else
+              R(1,6)=R(1,6)+1;
+          end
+          
+      else 
+          break
+
+      end
+      
+  writePosition(s1,R(1,1)/180)
+  writePosition(s2,R(1,2)/180)
+  writePosition(s3,R(1,3)/180)
+  writePosition(s4,R(1,4)/180)
+  writePosition(s5,R(1,5)/180)
+  writePosition(s6,R(1,6)/180)
+  pause(0.005)
+  
+  end
+  % go to the desire postion where to drop the object
+  while 1 
+      if R(1,6)<168
+          R(1,6)=R(1,6)+1;
+      elseif R(1,6)>172
+          R(1,6)=R(1,6)-1;
+      else
+          R(1,1)=30;
+          break
+      end
+  writePosition(s6,R(1,6)/180) 
+  end
+  %drop the object
+  writePosition(s1,R(1,1)/180)
+  pause(5)
+  % go to the middle point after the task has been done
+  for i=0:5:90
+  writePosition(s6,(170-i)/180)
+  pause(0.005)
+  end
+  
+  pause(2)
+  
+end
